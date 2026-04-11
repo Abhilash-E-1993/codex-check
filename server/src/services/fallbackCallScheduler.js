@@ -5,6 +5,10 @@ import {
   triggerMechanicReminderCall,
 } from "./twilioService.js";
 import { getRequestSnapshot, getUserSnapshot } from "./notificationService.js";
+import {
+  advanceRequestToNextMechanic,
+} from "./requestRoutingService.js";
+import { sendNewRequestNotification } from "./notificationService.js";
 
 const FALLBACK_STATUS = {
   SCHEDULED: "scheduled",
@@ -144,18 +148,7 @@ export const processFallbackCallForRequest = async (requestId) => {
     requestId,
   });
 
-  if (!isTwilioReminderConfigured()) {
-    await updateFallbackCallFields(requestId, {
-      fallbackCallStatus: FALLBACK_STATUS.DISABLED,
-      fallbackCallSkippedReason: "twilio-not-configured",
-      fallbackCallCompletedAt: null,
-    });
-    return {
-      success: false,
-      skipped: true,
-      reason: "twilio-not-configured",
-    };
-  }
+  const twilioEnabled = isTwilioReminderConfigured();
 
   const claim = await claimFallbackCall(requestId);
 
@@ -202,42 +195,49 @@ export const processFallbackCallForRequest = async (requestId) => {
     };
   }
 
+  let callResult = {
+    success: false,
+    skipped: true,
+    reason: twilioEnabled ? "call-not-attempted" : "twilio-not-configured",
+  };
+
   try {
-    const mechanicPhoneNumber =
-      claim.request.mechanicPhoneNumber ||
-      (await getMechanicPhoneNumberForRequest(claim.request));
+    if (twilioEnabled) {
+      const mechanicPhoneNumber =
+        claim.request.mechanicPhoneNumber ||
+        (await getMechanicPhoneNumberForRequest(claim.request));
 
-    if (!mechanicPhoneNumber) {
-      await markFallbackCallSkipped(requestId, "mechanic-phone-missing");
-      console.warn("[fallback-call] Mechanic phone missing", {
-        requestId,
+      if (!mechanicPhoneNumber) {
+        await markFallbackCallSkipped(requestId, "mechanic-phone-missing");
+        console.warn("[fallback-call] Mechanic phone missing", {
+          requestId,
+        });
+      } else {
+        callResult = await triggerMechanicReminderCall({
+          requestId,
+          mechanicPhoneNumber,
+        });
+
+        await updateFallbackCallFields(requestId, {
+          fallbackCallStatus: FALLBACK_STATUS.COMPLETED,
+          fallbackCallProvider: "twilio",
+          fallbackCallReference: callResult.callSid,
+          fallbackCallCompletedAt: new Date(),
+          fallbackCallError: null,
+        });
+
+        console.log("[fallback-call] Twilio reminder completed", {
+          requestId,
+          callSid: callResult.callSid,
+        });
+      }
+    } else {
+      await updateFallbackCallFields(requestId, {
+        fallbackCallStatus: FALLBACK_STATUS.DISABLED,
+        fallbackCallSkippedReason: "twilio-not-configured",
+        fallbackCallCompletedAt: new Date(),
       });
-      return {
-        success: false,
-        skipped: true,
-        reason: "mechanic-phone-missing",
-      };
     }
-
-    const result = await triggerMechanicReminderCall({
-      requestId,
-      mechanicPhoneNumber,
-    });
-
-    await updateFallbackCallFields(requestId, {
-      fallbackCallStatus: FALLBACK_STATUS.COMPLETED,
-      fallbackCallProvider: "twilio",
-      fallbackCallReference: result.callSid,
-      fallbackCallCompletedAt: new Date(),
-      fallbackCallError: null,
-    });
-
-    console.log("[fallback-call] Twilio reminder completed", {
-      requestId,
-      callSid: result.callSid,
-    });
-
-    return result;
   } catch (error) {
     await updateFallbackCallFields(requestId, {
       fallbackCallStatus: FALLBACK_STATUS.FAILED,
@@ -249,9 +249,25 @@ export const processFallbackCallForRequest = async (requestId) => {
       requestId,
       message: error.message,
     });
-
-    throw error;
   }
+
+  const routingResult = await advanceRequestToNextMechanic(requestId, {
+    expectedMechanicId: claim.request.mechanicId,
+    reason: "mechanic-timeout",
+  });
+
+  if (routingResult.advanced) {
+    await Promise.allSettled([
+      sendNewRequestNotification(requestId),
+      prepareFallbackCallForRequest(requestId),
+    ]);
+  }
+
+  return {
+    ...callResult,
+    advancedToNextMechanic: routingResult.advanced,
+    queueExhausted: routingResult.exhausted,
+  };
 };
 
 export const scheduleFallbackCallTimer = (requestId, scheduledFor) => {
@@ -334,28 +350,22 @@ export const prepareFallbackCallForRequest = async (requestId) => {
     fallbackCallEnabled: twilioEnabled,
     fallbackCallDelayMs: fallbackDelayMs,
     fallbackCallScheduledFor: scheduledFor,
-    fallbackCallStatus: twilioEnabled
-      ? FALLBACK_STATUS.SCHEDULED
-      : FALLBACK_STATUS.DISABLED,
+    fallbackCallStatus: FALLBACK_STATUS.SCHEDULED,
     fallbackCallProvider: "twilio",
     fallbackCallReference: null,
     fallbackCallTriggeredAt: null,
     fallbackCallCompletedAt: null,
     fallbackCallAttemptCount: 0,
     fallbackCallLastAttemptAt: null,
-    fallbackCallSkippedReason: twilioEnabled
-      ? null
-      : "twilio-not-configured",
+    fallbackCallSkippedReason: null,
     fallbackCallError: null,
   });
 
-  if (twilioEnabled) {
-    scheduleFallbackCallTimer(requestId, scheduledFor);
-  }
+  scheduleFallbackCallTimer(requestId, scheduledFor);
 
   return {
     enabled: twilioEnabled,
-    scheduled: twilioEnabled,
+    scheduled: true,
     scheduledFor: scheduledFor.toISOString(),
     delayMs: fallbackDelayMs,
   };

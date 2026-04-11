@@ -12,7 +12,10 @@ import {
   verifyCompletionOTP,
 } from "../services/firestoreService";
 
-import { notifyCustomerAboutAcceptedRequest } from "../services/notificationService";
+import {
+  advanceRequestToNextMechanic,
+  notifyCustomerAboutAcceptedRequest,
+} from "../services/notificationService";
 
 const MechanicDashboard = () => {
 
@@ -98,11 +101,20 @@ const MechanicDashboard = () => {
       setNotificationWarning("");
       setSavingStatusMessage("Updating the request status...");
 
-      await updateRequestStatus(
-        requestId,
-        nextStatus,
-        currentUser.uid
-      );
+      if (nextStatus === "Rejected") {
+        setSavingStatusMessage("Offering the request to the next nearest mechanic...");
+
+        await advanceRequestToNextMechanic({
+          currentUser,
+          requestId,
+        });
+      } else {
+        await updateRequestStatus(
+          requestId,
+          nextStatus,
+          currentUser.uid
+        );
+      }
 
       if (nextStatus === "Accepted") {
 
@@ -306,6 +318,7 @@ const MechanicDashboard = () => {
           <RequestList
             requests={requests}
             forMechanic
+            acceptanceBlocked={mechanicBusy}
             onAction={handleRequestAction}
             onGenerateOtp={handleGenerateOtp}
             onVerifyOtp={handleVerifyOtp}

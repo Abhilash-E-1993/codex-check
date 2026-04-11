@@ -92,9 +92,9 @@ TWILIO_TIMEOUT_SECONDS=25
 
 ## Browser Notifications
 
-- Browser permission is requested after sign-in.
-- The app generates an FCM device token and stores it in `users/{userId}.fcmToken`.
-- If the token changes, it is updated in Firestore automatically.
+- Browser permission is requested from an explicit in-app enable action, which is more reliable on newer mobile browsers.
+- The app generates an FCM device token and stores it in `users/{userId}.fcmTokens` while keeping `fcmToken` as a backward-compatible primary token.
+- If the token changes, it is added automatically, and invalid tokens are removed by the backend after failed sends.
 
 ## Local Development
 

@@ -1,9 +1,11 @@
 import {
   addDoc,
+  arrayUnion,
   collection,
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -12,7 +14,10 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { normalizeAreaName } from "../constants/appConstants";
-import { getMechanicAreaLocation } from "../utils/mechanicLocationService";
+import {
+  getMechanicAreaLocation,
+  getMechanicBaseLocation,
+} from "../utils/mechanicLocationService";
 
 const generateCompletionOTP = () =>
   `${Math.floor(1000 + Math.random() * 9000)}`;
@@ -41,6 +46,35 @@ const updateMechanicAvailability = async (
     availabilityStatus,
     updatedAt: serverTimestamp(),
   });
+};
+
+const ensureMechanicCanAcceptRequest = async (
+  requestId,
+  mechanicId
+) => {
+  const acceptedQuery = query(
+    collection(db, "serviceRequests"),
+    where("mechanicId", "==", mechanicId),
+    where("status", "==", "Accepted")
+  );
+
+  const acceptedSnapshot = await getDocs(acceptedQuery);
+  const hasAnotherAcceptedRequest = acceptedSnapshot.docs.some(
+    (item) => item.id !== requestId
+  );
+
+  if (hasAnotherAcceptedRequest) {
+    throw new Error("You already have an active job. Complete it first.");
+  }
+
+  const mechanicProfile = await getDoc(doc(db, "users", mechanicId));
+
+  if (
+    mechanicProfile.exists() &&
+    mechanicProfile.data()?.availabilityStatus === "busy"
+  ) {
+    throw new Error("You are currently busy with another accepted request.");
+  }
 };
 
 export const createOrUpdateUserProfile = async (
@@ -73,6 +107,7 @@ export const saveUserFcmToken = async (uid, fcmToken) => {
   await setDoc(
     doc(db, "users", uid),
     {
+      fcmTokens: arrayUnion(fcmToken),
       fcmToken,
       updatedAt: serverTimestamp(),
     },
@@ -106,10 +141,27 @@ export const getAvailableMechanicsByArea = async (
 
   const snap = await getDocs(mechanicsQuery);
 
-  return snap.docs.map((item) => ({
-    id: item.id,
-    ...item.data(),
-  }));
+  return snap.docs.map((item) => {
+    const mechanic = {
+      id: item.id,
+      ...item.data(),
+    };
+
+    const mechanicBaseLocation =
+      mechanic.mechanicBaseLocation ||
+      getMechanicBaseLocation(
+        mechanic.city,
+        mechanic.serviceArea,
+        item.id
+      );
+
+    return {
+      ...mechanic,
+      mechanicBaseLocation,
+      latitude: mechanic.latitude ?? mechanicBaseLocation?.lat ?? null,
+      longitude: mechanic.longitude ?? mechanicBaseLocation?.lng ?? null,
+    };
+  });
 };
 
 export const createServiceRequest = async (payload) => {
@@ -142,6 +194,32 @@ export const getRequestsForCustomer = async (customerId) => {
     id: item.id,
     ...item.data(),
   }));
+};
+
+export const subscribeToCustomerRequests = (
+  customerId,
+  onUpdate,
+  onError
+) => {
+  const requestRef = collection(db, "serviceRequests");
+
+  const requestQuery = query(
+    requestRef,
+    where("customerId", "==", customerId)
+  );
+
+  return onSnapshot(
+    requestQuery,
+    (snapshot) => {
+      onUpdate(
+        snapshot.docs.map((item) => ({
+          id: item.id,
+          ...item.data(),
+        }))
+      );
+    },
+    onError
+  );
 };
 
 export const getRequestsForMechanic = async (mechanicId) => {
@@ -180,6 +258,22 @@ export const hasActiveRequestBetweenUsers = async (
   const snap = await getDocs(requestQuery);
   return !snap.empty;
 };
+
+export const hasCustomerAcceptedRequest = async (customerId) => {
+  if (!customerId) {
+    return false;
+  }
+
+  const requestQuery = query(
+    collection(db, "serviceRequests"),
+    where("customerId", "==", customerId),
+    where("status", "==", "Accepted")
+  );
+
+  const snap = await getDocs(requestQuery);
+  return !snap.empty;
+};
+
 export const updateRequestStatus = async (requestId, status, actorId) => {
   const { requestDoc, requestData } = await getRequestDocumentOrThrow(requestId);
 
@@ -194,11 +288,17 @@ export const updateRequestStatus = async (requestId, status, actorId) => {
 
   // When mechanic ACCEPTS request → generate mechanic location
   if (status === "Accepted") {
-
-    const mechanicLocation = getMechanicAreaLocation(
-      requestData.mechanicCity,
-      requestData.mechanicServiceArea
+    await ensureMechanicCanAcceptRequest(
+      requestId,
+      requestData.mechanicId
     );
+
+    const mechanicLocation =
+      requestData.assignedMechanicLocation ||
+      getMechanicAreaLocation(
+        requestData.mechanicCity,
+        requestData.mechanicServiceArea
+      );
 
     updatePayload.mechanicLocation = mechanicLocation;
 

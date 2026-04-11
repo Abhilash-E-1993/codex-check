@@ -4,17 +4,9 @@ const MechanicCard = ({
   requestDisabled = false,
   requestLabel = "Request Help",
 }) => {
-
   return (
-
     <div className="card flex flex-col justify-between">
-
-      {/* TOP SECTION */}
-
       <div>
-
-        {/* NAME */}
-
         <h3 className="text-lg font-semibold">
           {mechanic.name}
         </h3>
@@ -23,45 +15,33 @@ const MechanicCard = ({
           {mechanic.garageName}
         </p>
 
-        {/* DETAILS */}
-
         <div className="mt-4 space-y-1 text-sm text-muted">
+          <p>Phone: +91 {mechanic.phoneNumber}</p>
+          <p>Area: {mechanic.serviceArea}, {mechanic.city}</p>
+          <p>Experience: {mechanic.experienceYears} years</p>
 
-          <p>
-            📞 +91 {mechanic.phoneNumber}
-          </p>
-
-          <p>
-            📍 {mechanic.serviceArea}, {mechanic.city}
-          </p>
-
-          <p>
-            🛠 {mechanic.experienceYears} years experience
-          </p>
-
+          {mechanic.estimatedEtaMinutes != null && (
+            <p>
+              ETA: {mechanic.estimatedEtaMinutes} min
+              {mechanic.distanceKm != null
+                ? ` | ${mechanic.distanceKm.toFixed(1)} km`
+                : ""}
+            </p>
+          )}
         </div>
 
-        {/* SERVICES */}
-
         <div className="mt-4 flex flex-wrap gap-2">
-
           {mechanic.services?.map((service) => (
-
             <span
               key={service}
               className="badge"
             >
               {service}
             </span>
-
           ))}
-
         </div>
 
-        {/* STATUS */}
-
         <div className="mt-4">
-
           <span
             className={
               mechanic.availabilityStatus === "busy"
@@ -72,11 +52,13 @@ const MechanicCard = ({
             {mechanic.availabilityStatus || "available"}
           </span>
 
+          {mechanic.rank === 1 && (
+            <span className="badge badge-warning ml-2">
+              Closest Match
+            </span>
+          )}
         </div>
-
       </div>
-
-      {/* ACTION */}
 
       <button
         type="button"
@@ -88,11 +70,8 @@ const MechanicCard = ({
       >
         {requestLabel}
       </button>
-
     </div>
-
   );
-
 };
 
 export default MechanicCard;

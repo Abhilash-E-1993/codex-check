@@ -128,3 +128,13 @@ export const notifyCustomerAboutAcceptedRequest = async ({
     endpoint: "request-accepted",
     requestId,
   });
+
+export const advanceRequestToNextMechanic = async ({
+  currentUser,
+  requestId,
+}) =>
+  postNotificationEvent({
+    currentUser,
+    endpoint: "request-declined",
+    requestId,
+  });

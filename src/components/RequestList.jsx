@@ -15,6 +15,7 @@ const statusStyles = {
 const RequestList = ({
   requests,
   forMechanic = false,
+  acceptanceBlocked = false,
   onAction,
   onGenerateOtp,
   onVerifyOtp,
@@ -26,6 +27,12 @@ const RequestList = ({
 
   const shouldShowActiveLocation = (request) =>
     forMechanic && request.status === "Accepted" && request.customerLocation;
+
+  const shouldShowCustomerTracking = (request) =>
+    !forMechanic &&
+    request.status === "Accepted" &&
+    request.customerLocation &&
+    request.mechanicLocation;
 
   /* ---------- COPY OTP ---------- */
 
@@ -203,19 +210,30 @@ const RequestList = ({
             {!forMechanic &&
               request.status === "Accepted" && (
 
-                <div className="text-sm text-muted space-y-1">
+                <div className="tracking-request-summary">
 
-                  <p>Garage: {request.garageName || "Not shared"}</p>
+                  <div>
+                    <span className="tracking-request-label">Garage</span>
+                    <p className="tracking-request-value">
+                      {request.garageName || "Not shared"}
+                    </p>
+                  </div>
 
-                  <p>
-                    Phone: {request.mechanicPhoneNumber
-                      ? `+91 ${request.mechanicPhoneNumber}`
-                      : "Not shared"}
-                  </p>
+                  <div>
+                    <span className="tracking-request-label">Phone</span>
+                    <p className="tracking-request-value">
+                      {request.mechanicPhoneNumber
+                        ? `+91 ${request.mechanicPhoneNumber}`
+                        : "Not shared"}
+                    </p>
+                  </div>
 
-                  {etaMinutes && (
-                    <p>ETA: ~ {etaMinutes} minutes</p>
-                  )}
+                  <div>
+                    <span className="tracking-request-label">Starting ETA</span>
+                    <p className="tracking-request-value">
+                      {etaMinutes ? `~ ${etaMinutes} minutes` : "Calculating"}
+                    </p>
+                  </div>
 
                 </div>
 
@@ -238,6 +256,16 @@ const RequestList = ({
 
               )}
 
+            {shouldShowCustomerTracking(request) && (
+              <LocationMap
+                customerLocation={request.customerLocation}
+                mechanicLocation={request.mechanicLocation}
+                requestStatus={request.status}
+                completionOTP={request.completionOTP}
+                simulateMechanicMovement
+              />
+            )}
+
             {/* MECHANIC ACTIONS */}
 
             {forMechanic &&
@@ -251,8 +279,11 @@ const RequestList = ({
                     }
                     className="btn-primary"
                     type="button"
+                    disabled={acceptanceBlocked}
                   >
-                    Accept Request
+                    {acceptanceBlocked
+                      ? "Complete Current Job First"
+                      : "Accept Request"}
                   </button>
 
                   <button
@@ -398,6 +429,8 @@ const RequestList = ({
                 <LocationMap
                   customerLocation={request.customerLocation}
                   mechanicLocation={request.mechanicLocation}
+                  requestStatus={request.status}
+                  completionOTP={request.completionOTP}
                 />
 
                 <button

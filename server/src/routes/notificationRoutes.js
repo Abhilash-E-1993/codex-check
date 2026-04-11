@@ -4,6 +4,7 @@ import {
   sendNewRequestNotification,
   sendRequestAcceptedNotification,
 } from "../services/notificationService.js";
+import { advanceRequestToNextMechanic } from "../services/requestRoutingService.js";
 import {
   cancelFallbackCallForRequest,
   prepareFallbackCallForRequest,
@@ -161,6 +162,78 @@ router.post("/request-accepted", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to send customer notification.",
+      details: error.message,
+    });
+  }
+});
+
+router.post("/request-declined", async (req, res) => {
+  try {
+    const { requestId } = req.body;
+
+    if (!requestId) {
+      return res.status(400).json({
+        error: "requestId is required.",
+      });
+    }
+
+    const request = await getRequestSnapshot(requestId);
+
+    if (request.mechanicId !== req.user.uid) {
+      return res.status(403).json({
+        error: "Only the assigned mechanic can decline this request.",
+      });
+    }
+
+    const routingResult = await advanceRequestToNextMechanic(requestId, {
+      actorMechanicId: req.user.uid,
+      reason: "mechanic-rejected",
+    });
+
+    if (!routingResult.advanced) {
+      return res.status(200).json({
+        success: true,
+        advanced: false,
+        exhausted: routingResult.exhausted,
+        reason: routingResult.reason,
+      });
+    }
+
+    const [pushAttempt, fallbackAttempt] = await Promise.allSettled([
+      sendNewRequestNotification(requestId),
+      prepareFallbackCallForRequest(requestId),
+    ]);
+
+    const pushResult =
+      pushAttempt.status === "fulfilled"
+        ? pushAttempt.value
+        : {
+            success: false,
+            skipped: false,
+            error: pushAttempt.reason?.message || "Push notification failed.",
+          };
+
+    const fallbackCall =
+      fallbackAttempt.status === "fulfilled"
+        ? fallbackAttempt.value
+        : {
+            enabled: false,
+            scheduled: false,
+            error:
+              fallbackAttempt.reason?.message ||
+              "Fallback call scheduling failed.",
+          };
+
+    return res.status(200).json({
+      success: true,
+      advanced: true,
+      nextMechanicId: routingResult.nextMechanic?.mechanicId || null,
+      push: pushResult,
+      fallbackCall,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to reassign request to the next mechanic.",
       details: error.message,
     });
   }

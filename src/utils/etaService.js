@@ -3,6 +3,10 @@ import { normalizeAreaName } from "../constants/appConstants";
 const AVERAGE_SPEED_KMPH = 30;
 
 const toRadians = (value) => (value * Math.PI) / 180;
+const hashSeed = (value = "") =>
+  `${value}`
+    .split("")
+    .reduce((total, char, index) => total + char.charCodeAt(0) * (index + 1), 0);
 
 /* ---------- REAL AREA COORDINATES ---------- */
 
@@ -19,6 +23,44 @@ const AREA_COORDINATES = {
    "Electronic City": { lat: 12.8399, lng: 77.6770 },
     Marathahalli: { lat: 12.9591, lng: 77.6974 },
   },
+};
+
+const CITY_CENTER_COORDINATES = {
+  Ahmedabad: { lat: 23.0225, lng: 72.5714 },
+  Bengaluru: { lat: 12.9716, lng: 77.5946 },
+  Chennai: { lat: 13.0827, lng: 80.2707 },
+  Delhi: { lat: 28.6139, lng: 77.2090 },
+  Gurgaon: { lat: 28.4595, lng: 77.0266 },
+  Hyderabad: { lat: 17.3850, lng: 78.4867 },
+  Jaipur: { lat: 26.9124, lng: 75.7873 },
+  Kochi: { lat: 9.9312, lng: 76.2673 },
+  Kolkata: { lat: 22.5726, lng: 88.3639 },
+  Mumbai: { lat: 19.0760, lng: 72.8777 },
+  Noida: { lat: 28.5355, lng: 77.3910 },
+  Pune: { lat: 18.5204, lng: 73.8567 },
+};
+
+const createDemoAreaCoordinate = (city, area) => {
+  const cityCenter = CITY_CENTER_COORDINATES[city];
+
+  if (!cityCenter) {
+    return null;
+  }
+
+  const seed = hashSeed(`${city}-${area}`);
+  const cityRadiusSteps = 0.06;
+  const latOffset = (((seed % 900) / 900) - 0.5) * cityRadiusSteps;
+  const lngOffsetBase =
+    ((((Math.floor(seed / 13) % 900) / 900) - 0.5) * cityRadiusSteps);
+  const longitudeScale = Math.max(
+    Math.cos((cityCenter.lat * Math.PI) / 180),
+    0.35
+  );
+
+  return {
+    lat: Number((cityCenter.lat + latOffset).toFixed(6)),
+    lng: Number((cityCenter.lng + lngOffsetBase / longitudeScale).toFixed(6)),
+  };
 };
 
 /* ---------- DISTANCE ---------- */
@@ -52,13 +94,7 @@ export const getApproximateAreaCoordinates = (city, area) => {
     return AREA_COORDINATES[city][normalizedArea];
   }
 
-  /* fallback to city center if unknown */
-
-  const fallbackCityCenters = {
-    Bengaluru: { lat: 12.9716, lng: 77.5946 },
-  };
-
-  return fallbackCityCenters[city] || null;
+  return createDemoAreaCoordinate(city, normalizedArea);
 };
 
 /* ---------- ETA USING AREA ---------- */

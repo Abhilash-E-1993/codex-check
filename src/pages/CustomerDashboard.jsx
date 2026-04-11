@@ -19,14 +19,18 @@ import {
   createOrUpdateUserProfile,
   createServiceRequest,
   getAvailableMechanicsByArea,
-  getRequestsForCustomer,
+  hasCustomerAcceptedRequest,
   hasActiveRequestBetweenUsers,
+  subscribeToCustomerRequests,
 } from "../services/firestoreService";
 
 import { notifyMechanicAboutNewRequest } from "../services/notificationService";
 
 import { getCurrentLocation } from "../utils/locationService";
-import { getMechanicAreaLocation } from "../utils/mechanicLocationService";
+import {
+  createMechanicRoutingQueue,
+  rankMechanicsByDistance,
+} from "../utils/mechanicRoutingService";
 
 const CustomerDashboard = () => {
 
@@ -61,6 +65,21 @@ const CustomerDashboard = () => {
 
   }, {});
 
+  const sortedRequests = [...requests].sort((a, b) => {
+    const priority = {
+      Accepted: 1,
+      Pending: 2,
+      Completed: 3,
+      Rejected: 4,
+    };
+
+    return (priority[a.status] || 99) - (priority[b.status] || 99);
+  });
+
+  const customerHasAcceptedRequest = requests.some(
+    (request) => request.status === "Accepted"
+  );
+
   useEffect(() => {
 
     if (profile?.city) setSelectedCity(profile.city);
@@ -93,21 +112,25 @@ const CustomerDashboard = () => {
         selectedCity,
         selectedArea
       );
-
-      const requestPromise = getRequestsForCustomer(currentUser.uid);
-
-      const [mechanicResult, requestResult] =
-        await Promise.allSettled([
-          mechanicPromise,
-          requestPromise,
-        ]);
+      const locationPromise = getCurrentLocation();
+      const [mechanicResult, locationResult] = await Promise.allSettled([
+        mechanicPromise,
+        locationPromise,
+      ]);
 
       if (mechanicResult.status === "fulfilled") {
-        setMechanics(mechanicResult.value || []);
-      }
+        const mechanicList = mechanicResult.value || [];
 
-      if (requestResult.status === "fulfilled") {
-        setRequests(requestResult.value || []);
+        if (locationResult.status === "fulfilled") {
+          setMechanics(
+            rankMechanicsByDistance({
+              mechanics: mechanicList,
+              customerLocation: locationResult.value,
+            })
+          );
+        } else {
+          setMechanics(mechanicList);
+        }
       }
 
     } catch {
@@ -127,6 +150,24 @@ const CustomerDashboard = () => {
     loadData();
 
   }, [loadData]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      return undefined;
+    }
+
+    const unsubscribe = subscribeToCustomerRequests(
+      currentUser.uid,
+      (requestList) => {
+        setRequests(requestList || []);
+      },
+      () => {
+        setError("Unable to keep request updates in sync.");
+      }
+    );
+
+    return unsubscribe;
+  }, [currentUser?.uid]);
 
   const saveLocation = async (city, area) => {
 
@@ -193,6 +234,19 @@ const CustomerDashboard = () => {
     setRequestProgressMessage("Checking for any active request with this mechanic...");
 
     try {
+      const alreadyHasAcceptedRequest =
+        customerHasAcceptedRequest ||
+        (await hasCustomerAcceptedRequest(currentUser.uid));
+
+      if (alreadyHasAcceptedRequest) {
+
+        setError(
+          "You already have an accepted request in progress. Complete it before sending another one."
+        );
+
+        return;
+
+      }
 
       const alreadyHasActiveRequest =
         activeRequestsByMechanic[requestModalMechanic.id] ||
@@ -224,10 +278,30 @@ const CustomerDashboard = () => {
 
       }
 
-      const mechanicLocation = getMechanicAreaLocation(
-        requestModalMechanic.city,
-        requestModalMechanic.serviceArea
+      setRequestProgressMessage("Ranking the nearest available mechanics...");
+
+      const availableMechanics = await getAvailableMechanicsByArea(
+        selectedCity,
+        selectedArea
       );
+
+      const rankedMechanics = rankMechanicsByDistance({
+        mechanics: availableMechanics,
+        customerLocation,
+        serviceType: selectedServiceType,
+      });
+
+      if (!rankedMechanics.length) {
+        throw new Error(
+          "No available mechanics in this area can take this request right now."
+        );
+      }
+
+      const nearestMechanic = rankedMechanics[0];
+      const routingQueue = createMechanicRoutingQueue(
+        rankedMechanics
+      );
+
       setRequestProgressMessage("Sending your request to the mechanic...");
 
       const requestId = await createServiceRequest({
@@ -235,15 +309,25 @@ const CustomerDashboard = () => {
         customerId: currentUser.uid,
         customerName: profile?.name || "Customer",
 
-        mechanicId: requestModalMechanic.id,
-        mechanicName: requestModalMechanic.name,
+        mechanicId: nearestMechanic.id,
+        mechanicName: nearestMechanic.name,
 
-        garageName: requestModalMechanic.garageName,
-        mechanicPhoneNumber: requestModalMechanic.phoneNumber,
+        garageName: nearestMechanic.garageName,
+        mechanicPhoneNumber: nearestMechanic.phoneNumber,
 
-        mechanicCity: requestModalMechanic.city,
-        mechanicServiceArea: requestModalMechanic.serviceArea,
-        mechanicLocation,
+        mechanicCity: nearestMechanic.city,
+        mechanicServiceArea: nearestMechanic.serviceArea,
+        assignedMechanicLocation:
+          nearestMechanic.mechanicBaseLocation,
+        mechanicRoutingQueue: routingQueue,
+        mechanicRoutingIndex: 0,
+        matchedMechanicCount: routingQueue.length,
+        currentMechanicEtaMinutes:
+          nearestMechanic.estimatedEtaMinutes ?? null,
+        currentMechanicDistanceKm:
+          nearestMechanic.distanceKm != null
+            ? Number(nearestMechanic.distanceKm.toFixed(2))
+            : null,
 
         city: selectedCity,
         area: selectedArea,
@@ -376,6 +460,12 @@ const CustomerDashboard = () => {
         </div>
       )}
 
+      {customerHasAcceptedRequest && (
+        <div className="badge badge-warning">
+          You already have a mechanic on the way. New requests are disabled until this service is completed.
+        </div>
+      )}
+
       {(capturingLocation || creatingRequest) && (
         <Loader
           compact
@@ -414,10 +504,13 @@ const CustomerDashboard = () => {
                 mechanic={mechanic}
                 onRequest={handleRequest}
                 requestDisabled={
+                  customerHasAcceptedRequest ||
                   Boolean(activeRequestsByMechanic[mechanic.id])
                 }
                 requestLabel={
-                  activeRequestsByMechanic[mechanic.id]
+                  customerHasAcceptedRequest
+                    ? "Active Service In Progress"
+                    : activeRequestsByMechanic[mechanic.id]
                     ? `Request ${activeRequestsByMechanic[mechanic.id]}`
                     : "Request Help"
                 }
@@ -439,7 +532,7 @@ const CustomerDashboard = () => {
           My Service Requests
         </h3>
 
-        <RequestList requests={requests} />
+        <RequestList requests={sortedRequests} />
 
       </section>
 
@@ -465,6 +558,10 @@ const CustomerDashboard = () => {
             <p className="text-muted text-sm mb-4">
               {requestModalMechanic.serviceArea}, {requestModalMechanic.city}
             </p>
+
+            <div className="badge badge-warning mb-4">
+              The nearest available mechanic in this area will be contacted first.
+            </div>
 
             <div className="service-option-grid">
 

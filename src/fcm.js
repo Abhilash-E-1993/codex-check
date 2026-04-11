@@ -41,6 +41,14 @@ export const registerMessagingServiceWorker = async () => {
   return navigator.serviceWorker.register(buildServiceWorkerUrl());
 };
 
+export const getNotificationPermissionState = () => {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "denied";
+  }
+
+  return Notification.permission;
+};
+
 export const showBrowserNotification = async ({
   title,
   body,
@@ -70,6 +78,7 @@ export const showBrowserNotification = async ({
     icon: NOTIFICATION_ICON_PATH,
     badge: NOTIFICATION_ICON_PATH,
     tag,
+    renotify: true,
     data: {
       url,
     },
@@ -83,12 +92,10 @@ export const requestNotificationPermission = async () => {
     return "denied";
   }
 
-  if (Notification.permission === "granted") {
-    return "granted";
-  }
+  const currentPermission = getNotificationPermissionState();
 
-  if (Notification.permission === "denied") {
-    return "denied";
+  if (currentPermission === "granted" || currentPermission === "denied") {
+    return currentPermission;
   }
 
   return Notification.requestPermission();

@@ -13,6 +13,7 @@ import {
 } from "../constants/appConstants";
 
 import { createOrUpdateUserProfile } from "../services/firestoreService";
+import { getMechanicBaseLocation } from "../utils/mechanicLocationService";
 
 const RoleSelectionPage = () => {
 
@@ -112,6 +113,29 @@ const RoleSelectionPage = () => {
       }
 
       await createOrUpdateUserProfile(currentUser.uid, {
+        ...(role === "mechanic"
+          ? (() => {
+              const normalizedArea = normalizeAreaName(city, serviceArea);
+              const mechanicBaseLocation = getMechanicBaseLocation(
+                city,
+                normalizedArea,
+                currentUser.uid
+              );
+
+              return {
+                city,
+                serviceArea: normalizedArea,
+                garageName,
+                phoneNumber,
+                experienceYears: Number(experienceYears),
+                services,
+                availabilityStatus: "available",
+                mechanicBaseLocation,
+                latitude: mechanicBaseLocation?.lat ?? null,
+                longitude: mechanicBaseLocation?.lng ?? null,
+              };
+            })()
+          : {}),
 
         name: profile?.name || currentUser.displayName || "User",
         email: profile?.email || currentUser.email,
@@ -119,15 +143,7 @@ const RoleSelectionPage = () => {
         role,
 
         ...(role === "mechanic"
-          ? {
-              city,
-              serviceArea: normalizeAreaName(city, serviceArea),
-              garageName,
-              phoneNumber,
-              experienceYears: Number(experienceYears),
-              services,
-              availabilityStatus: "available",
-            }
+          ? {}
           : {
               city: null,
               serviceArea: null,
@@ -136,6 +152,9 @@ const RoleSelectionPage = () => {
               experienceYears: null,
               services: [],
               availabilityStatus: null,
+              mechanicBaseLocation: null,
+              latitude: null,
+              longitude: null,
             }),
 
       });
